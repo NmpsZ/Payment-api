@@ -1,7 +1,5 @@
 # Simple Billing & Payment API
 
-[![standard-readme compliant](https://img.shields.io/badge/readme%20style-standard-brightgreen.svg?style=flat-square)](https://github.com/RichardLitt/standard-readme)
-
 A simple REST API built with **Go (Gin)** and **PostgreSQL** to create invoices and automatically pay off unpaid bills using FIFO (oldest due date first).
 
 ---
@@ -18,7 +16,9 @@ A simple REST API built with **Go (Gin)** and **PostgreSQL** to create invoices 
   - [Error Handling](#error-handling)
 - [Architecture & Design Choices](#architecture--design-choices)
   - [Folder Structure](#folder-structure)
+  - [Why PostgreSQL?](#why-postgresql)
   - [Key Decisions](#key-decisions)
+- [Bonus Features](#bonus-features)
 - [Testing](#testing)
 - [Scaling to 10M Invoices](#scaling-to-10m-invoices)
 
@@ -213,11 +213,23 @@ Payment-backend/
 └── README.md
 ```
 
+### Why PostgreSQL?
+
+I chose **PostgreSQL** because it is a reliable relational database with great SQL and transaction support. It has complete features for managing related data and is open-source, making it suitable for both building this project and deploying to production.
+
 ### Key Decisions
 1. **Rejecting Overpayment:** If someone pays more than their total debt, the API rejects it with `422 OVERPAYMENT`. Since we don't have a user wallet or credit system yet, rejecting it is the safest way to avoid lost or unaccounted money.
 2. **Dynamic Status:** We don't save `status` directly in the database. Instead, it is calculated live (`total_amount - paid_amount`). This ensures the status is always 100% accurate and never gets out of sync.
 3. **Auto-Create Units:** When making an invoice, if the unit doesn't exist yet, the system creates it automatically. No need to register units beforehand.
 4. **Simple Numbers:** Uses standard `float64` in Go and `NUMERIC(12,2)` in PostgreSQL for clean, readable code without needing extra heavy libraries.
+
+---
+
+## Bonus Features
+
+From the optional bonus list, I chose to focus on 2 items:
+1. **Input Validation with Appropriate HTTP Status Codes:** Enforcing validation at the handler boundary with clear error responses (`400 Bad Request`, `404 Not Found`, and `422 Unprocessable Entity` for business rule violations).
+2. **Unit Tests:** Pure in-memory unit tests covering core business logic (FIFO payment allocation rules and invoice status/balance derivation).
 
 ---
 
@@ -244,17 +256,9 @@ go test ./... -v
 
 ## Scaling to 10M Invoices
 
-If the database grows from 10,000 to 10,000,000 invoices, here is how we can keep it fast and light on resources:
+When data grows from 10,000 to 10,000,000 invoices, I would focus on improving both the Database and Application layers:
 
-### 1. Database Improvements
-* **Save Remaining Balance directly:** Add an `outstanding_amount` column to the invoice table and subtract from it during payments. This way, we don't have to calculate sums from payment history every time someone views a bill.
-* **Index Only Unpaid Invoices:** In 10M invoices, most will already be paid. Creating a partial index (`WHERE total_amount > paid_amount`) keeps the index super small and lightning fast when searching for open bills.
-* **Partition Tables by Year:** Split old invoices into yearly tables so normal daily queries only look at recent data.
-* **Read Replicas:** Send read requests (`GET /invoices`) to read-only database copies, keeping the primary database free for payments.
-
-### 2. Application & API Improvements
-* **Cursor Pagination:** When listing bills, fetch them page by page (`WHERE id > last_id LIMIT 20`) instead of using slow `OFFSET` queries.
-* **Cache Paid Invoices:** Invoices that are fully paid never change again, so we can save them in Redis to avoid hitting the database.
-* **Timeouts & Connection Limits:** Set a short database timeout (e.g. 3 seconds) and limit connection pool size to stop the server from crashing under high traffic.
-
----
+* **Indexing:** Add indexes on frequently searched fields (such as `unit_id` and `due_date`) to keep query lookups fast.
+* **Pagination:** Use pagination on listing endpoints to avoid fetching large volumes of data all at once.
+* **Reduce Unnecessary Queries:** Store remaining balances directly on invoice records instead of recalculating payment totals on every read.
+* **Asynchronous Processing:** Offload non-urgent tasks (like sending payment receipts or notifications) to background workers so the system uses resources efficiently and handles higher traffic smoothly.
